@@ -64,9 +64,22 @@ def run(sess, num_iters, tensor_or_op_name_to_replica_names,
 ```
 
 ## Data Partitioning
-Parallax supports data parallelism, meaning that a disjoint subset of input data has to be assigned to each worker. The way of data processing is different according to the application. The data processing could be defined as a python function, operations in the graph or [dataset](https://www.tensorflow.org/api_docs/python/tf/data/Dataset) API. As a result, Parallax provides three different ways for correct data partitioning.
+Parallax supports data parallelism, meaning that a disjoint subset of input data has to be assigned to each worker. The way of data processing is different according to the application. The way of data processing is different according to the application. The data processing could be defined as [dataset](https://www.tensorflow.org/api_docs/python/tf/data/Dataset) API, a python function, and operations in the graph. As a result, Parallax provides data partitioning for dataset API which is the simplest one, and utilizing other methods is possible as an additional option.
 
-### Using run function and feed
+### 1. Utilizing the dataset API
+TensorFlow introduces the dataset API for comfortable input preprocessing. The dataset is defined as a function library instead of operators in the TensorFlow graph, so Parallax uses a different approach compared to the examples above.
+For the dataset, call `ds = shard.shard(ds)`. `ds` is a dataset defined by TensorFlow and `shard` is a Parallax library. Then, Parallax updates the function library definition related to the shard when the single graph is transformed. Note that Parallax does not support nested shard call, which means you cannot call `shard.shard(ds)` inside a map function of a dataset.
+This is the input preprocessing code of [TensorFlow CNN Benchmark](https://github.com/snuspl/parallax/blob/master/parallax/parallax/examples/tf_cnn_benchmarks/preprocessing.py).
+```shell
+file_names.sort()
+ds = tf.data.TFRecordDataset.list_files(file_names)
+ds = shard.shard(ds)
+ds = ds.apply(
+    interleave_ops.parallel_interleave(
+        tf.data.TFRecordDataset, cycle_length=10))
+```
+
+### 2. Using run function and feed
 Some of the applications define input data as a placeholder, and feed them through TensorFlow session. In this case, you can utilize `num_workers`, `worker_id`, `num_replicas_per_worker` in the `run` function. This code snippet comes from [LM-1B](https://github.com/snuspl/parallax/blob/master/parallax/parallax/examples/lm1b/lm1b_distributed_driver.py) example.
 
 ```shell
@@ -90,7 +103,7 @@ def run(sess, num_iters, tensor_or_op_name_to_replica_names,
                 feeds[w_names[replica_id]] = w[start_idx:end_idx]
             fetched = sess.run(fetches, feeds)
 ```
-### Embedding shard operators in the graph
+### 3. Embedding shard operators in the graph
 Construct a single device graph with the `num_shards` and `shard_id` tensors from `shard.create_num_shards_and_shard_id()`. `shard` is a library from Parallax. Then, Parallax internally changes the tensor values while transforming the single graph into a distributed version. Below code comes from [Skip-Thoughts Vectors](https://github.com/snuspl/parallax/blob/master/parallax/parallax/examples/skip_thoughts/ops/input_ops.py).
 ```shell
 data_files.sort()
@@ -108,18 +121,6 @@ slice_size = tf.cond(tf.less(shard_id, remainder), lambda: shard_size + 1,
 data_files = tf.slice(data_files, [slice_begin], [slice_size])
 ```
 
-### Utilizing the dataset API
-TensorFlow introduces the dataset API for comfortable input preprocessing. The dataset is defined as a function library instead of operators in the TensorFlow graph, so Parallax uses a different approach compared to the examples above.
-For the dataset, call `ds = shard.shard(ds)`. `ds` is a dataset defined by TensorFlow and `shard` is a Parallax library. Then, Parallax updates the function library definition related to the shard when the single graph is transformed. Note that Parallax does not support nested shard call, which means you cannot call `shard.shard(ds)` inside a map function of a dataset.
-This is the input preprocessing code of [TensorFlow CNN Benchmark](https://github.com/snuspl/parallax/blob/master/parallax/parallax/examples/tf_cnn_benchmarks/preprocessing.py).
-```shell
-file_names.sort()
-ds = tf.data.TFRecordDataset.list_files(file_names)
-ds = shard.shard(ds)
-ds = ds.apply(
-    interleave_ops.parallel_interleave(
-        tf.data.TFRecordDataset, cycle_length=10))
-```
 ## Setting Environment Variables
 Parallax reads the environment variables below from the machine where an application is launched. `CUDA_VISIBLE_DEVICES` is set with the information from `resource_info` so that the user defined value will be ignored.
 * PARALLAX_LOG_LEVEL : The log level of Parallax. Default level is INFO. Refer [logging](https://docs.python.org/2/library/logging.html).
